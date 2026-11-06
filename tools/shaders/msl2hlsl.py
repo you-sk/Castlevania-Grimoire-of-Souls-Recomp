@@ -274,7 +274,7 @@ def rewrite_packed_arrays(text, names):
                 j += 1
             idx = text[m.end():j - 1]
             out.append(text[pos:m.start()])
-            out.append(f"{packed_array_name(name)}[({idx}) >> 2][({idx}) & 3]")
+            out.append(f"{packed_array_name(name)}({idx})")
             pos = j
         out.append(text[pos:])
         text = "".join(out)
@@ -354,12 +354,21 @@ def emit(prog, varyings):
             b_reg = int(re.search(r"buffer\s*\((\d+)\)", attr).group(1))
             layout, size = cbuffer_layout(prog.structs[st])
             lines = [f"cbuffer {name} : register(b{b_reg})", "{"]
+            array_helpers = []
             for mb, off in layout:
                 base, n = split_type(mb.type)
                 comp = "xyzw"[(off % 16) // 4]
                 if mb.array and n == 1:
-                    count = (mb.array + 3) // 4
-                    lines.append(f"    {hlsl_type(base, 4)} {packed_array_name(mb.name)}[{count}] : packoffset(c{off // 16});")
+                    scalar = hlsl_type(base, 1)
+                    fname = packed_array_name(mb.name)
+                    cases = []
+                    for index in range(mb.array):
+                        offset = off + index * 4
+                        var = f"{fname}_{index}"
+                        component = "xyzw"[(offset % 16) // 4]
+                        lines.append(f"    {scalar} {var} : packoffset(c{offset // 16}.{component});")
+                        cases.append(f"case {index}: return {var};")
+                    array_helpers.append(f"{scalar} {fname}(int index) {{ switch (index) {{ " + " ".join(cases) + f" default: return {scalar}(0); }} }}")
                     packed.append(mb.name)
                     continue
                 if mb.array and n == 2:
@@ -368,6 +377,7 @@ def emit(prog, varyings):
                 lines.append(f"    {hlsl_type(base, n)} {mb.name}{arr} : packoffset(c{off // 16}.{comp});")
             lines.append("};")
             out.extend(lines)
+            out.extend(array_helpers)
             info["cbuffers"].append((name, b_reg, [(mb.name, off) for mb, off in layout], size))
             cb_names.append(name)
         elif t.endswith("*"):

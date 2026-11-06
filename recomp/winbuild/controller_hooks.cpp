@@ -23,9 +23,9 @@
 
 namespace recomp
 {
-    void f_200fbe0_orig(Ctx& c);
-    void f_200f60c_orig(Ctx& c);
-    void f_1ecc8f0_orig(Ctx& c);
+    void f_201e934_orig(Ctx& c);
+    void f_201e360_orig(Ctx& c);
+    void f_1e84b48_orig(Ctx& c);
 }
 
 namespace
@@ -274,7 +274,7 @@ namespace recomp
         else if (self && trigger >= AXS05P && trigger <= AXS28P)
             pressed = Axis(self, size_t(trigger - AXS01P)) > 0.5f;
         else if (!self || !InputSystemFallback(self, trigger, pressed))
-            return f_200fbe0_orig(c);
+            return f_201e934_orig(c);
         c.x[0] = pressed;
     }
 
@@ -285,7 +285,7 @@ namespace recomp
         void* self = reinterpret_cast<void*>(c.x[0]);
         if (self)
             UpdateStandardPad(self);
-        f_200f60c_orig(c);
+        f_201e360_orig(c);
         if (self && g_pad.active)  // the sticks as the game's vectors (y up-positive)
         {
             float* axis = &Field<float>(self, kAxisL);
@@ -315,7 +315,7 @@ namespace recomp
         void* joystick = Joystick();
         bool pressed = false;
         if (!joystick || !InputSystemFallback(joystick, trigger, pressed))
-            return f_1ecc8f0_orig(c);
+            return f_1e84b48_orig(c);
         static bool before[NEW_DPAD_LEFT - NEW_RIGHT_TRIGGER + 1] = {};
         bool& was = before[trigger - NEW_RIGHT_TRIGGER];
         c.x[0] = pressed && !was;

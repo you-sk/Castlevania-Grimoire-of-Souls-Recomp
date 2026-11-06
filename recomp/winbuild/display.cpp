@@ -1,3 +1,4 @@
+#include "save_root_143.h"
 // Display settings from gosr.ini:
 //
 //   [display]
@@ -122,6 +123,7 @@ namespace recomp
 {
     void* WrapDisplayIcall(const char* name, void* original)
     {
+        if (void* isolated = gosr143::WrapPersistentPath(name, original); isolated != original) return isolated;
         if (!original)
             return original;
         if (!strncmp(name, "UnityEngine.Application::set_targetFrameRate", 44))

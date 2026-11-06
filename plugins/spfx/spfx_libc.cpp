@@ -202,7 +202,43 @@ namespace
         SYSTEM_INFO si;
         GetSystemInfo(&si);
         auto* info = static_cast<int32_t*>(P(c.x[2]));
-        info[0] = info[1] = int32_t(si.dwNumberOfProcessors);
+        // Each recompiled worker owns a committed 16 MiB guest stack.
+        // Bound this plugin's task pool, rather than exhausting a Sandbox.
+        DWORD processors = si.dwNumberOfProcessors ? si.dwNumberOfProcessors : 1;
+        DWORD workers = processors > 8 ? 8 : processors;
+        char setting[16] = {};
+        DWORD length = GetEnvironmentVariableA("GOSR_SPFX_WORKERS", setting, sizeof(setting));
+        if (length > 0 && length < sizeof(setting) && setting[0] >= '0' && setting[0] <= '9')
+        {
+            char* end = nullptr;
+            unsigned long requested = strtoul(setting, &end, 10);
+            if (end && *end == 0 && requested >= 1 && requested <= 16)
+                workers = requested < processors ? DWORD(requested) : processors;
+        }
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true))
+            spfx::Log("task pool: %lu workers (host processors %lu)", static_cast<unsigned long>(workers), static_cast<unsigned long>(processors));
+        // Darwin HOST_BASIC_INFO is 12 32-bit words, packed to 4 bytes.
+        // The task pipeline reads logical_cpu_max at byte 0x24, not max_cpus.
+        auto* count = static_cast<uint32_t*>(P(c.x[3]));
+        if (c.x[1] != 1 || !info || !count || *count < 12)
+        {
+            c.x[0] = 4; // KERN_INVALID_ARGUMENT; never write a short buffer.
+            return;
+        }
+        int32_t values[12] = {};
+        values[0] = values[1] = int32_t(workers);
+        values[3] = 0x0100000c; // CPU_TYPE_ARM64 of the guest plugin.
+        values[6] = values[7] = values[8] = values[9] = int32_t(workers);
+        MEMORYSTATUSEX memory{};
+        memory.dwLength = sizeof(memory);
+        if (GlobalMemoryStatusEx(&memory))
+        {
+            values[2] = int32_t(memory.ullTotalPhys > 0x7fffffffULL ? 0x7fffffffULL : memory.ullTotalPhys);
+            memcpy(&values[10], &memory.ullTotalPhys, sizeof(memory.ullTotalPhys));
+        }
+        memcpy(info, values, sizeof(values));
+        *count = 12;
         c.x[0] = 0;
     }
     void MachHostSelf(Ctx& c) { c.x[0] = 0x203; }

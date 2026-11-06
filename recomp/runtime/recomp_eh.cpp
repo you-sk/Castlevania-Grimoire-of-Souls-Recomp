@@ -11,18 +11,18 @@ namespace recomp
 {
     namespace
     {
-        // Typeinfo of Il2CppExceptionWrapper in the macOS v1.4.2 arm64 image.
-        constexpr uint64_t kWrapperTypeInfo = 0x3abc148;
+        // Typeinfo of Il2CppExceptionWrapper in the macOS v1.4.3 arm64 image.
+        constexpr uint64_t kWrapperTypeInfo = 0x3aec148;
 
         // C++ ABI stubs the game code calls.
-        constexpr uint64_t kUnwindResume = 0x340028c;
-        constexpr uint64_t kTerminate = 0x3400454;
-        constexpr uint64_t kAllocateException = 0x340049c;
-        constexpr uint64_t kBeginCatch = 0x34004b4;
-        constexpr uint64_t kEndCatch = 0x34004c0;
-        constexpr uint64_t kFreeException = 0x34004cc;
-        constexpr uint64_t kRethrow = 0x34004fc;
-        constexpr uint64_t kThrow = 0x3400508;
+        constexpr uint64_t kUnwindResume = 0x343026c;
+        constexpr uint64_t kTerminate = 0x3430434;
+        constexpr uint64_t kAllocateException = 0x343047c;
+        constexpr uint64_t kBeginCatch = 0x3430494;
+        constexpr uint64_t kEndCatch = 0x34304a0;
+        constexpr uint64_t kFreeException = 0x34304ac;
+        constexpr uint64_t kRethrow = 0x34304dc;
+        constexpr uint64_t kThrow = 0x34304e8;
 
         // An exception in flight between a landing pad and __cxa_end_catch or
         // _Unwind_Resume. x0 handed to the game points at `object`, which
@@ -152,6 +152,14 @@ namespace recomp
         InFlight* f = Push();
         c.x[0] = reinterpret_cast<uint64_t>(&f->object);
         c.x[1] = 0;
+    }
+
+    // __clang_call_terminate: begin catch, then terminate; never return.
+    void ClangCallTerminate143(Ctx& c)
+    {
+        SetGuestStackPointer(c.sp);
+        BeginCatch(c);
+        Terminate(c);
     }
 
     void RegisterExceptionImports()

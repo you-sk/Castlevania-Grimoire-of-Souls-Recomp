@@ -37,6 +37,20 @@ extern "C" void SPFX_PLUGIN_SetDrawParameter(int32_t camera, void* parameter);  
 
 namespace spfx::gl
 {
+    std::mutex g_coinTexturesLock143;
+    std::map<uint32_t, bool> g_coinTextures143;
+    void MarkCoinTexture143(uint32_t texture)
+    {
+        std::lock_guard<std::mutex> lock(g_coinTexturesLock143);
+        if (g_coinTextures143.size() < 128) g_coinTextures143[texture] = true;
+    }
+    bool CoinDraw143(const Program& program, const State& state)
+    {
+        std::lock_guard<std::mutex> lock(g_coinTexturesLock143);
+        for (const Uniform& u : program.uniforms)
+            if (u.type && uint32_t(u.samplerUnit) < kMaxUnits && g_coinTextures143.count(state.unit[uint32_t(u.samplerUnit)].texture2d)) return true;
+        return false;
+    }
     State& GetState()
     {
         static State state;
@@ -807,7 +821,7 @@ namespace spfx::gl
             }
         }
 
-        void ApplyFixedFunction(State& s)
+        void ApplyFixedFunction(State& s, bool coinDraw143)
         {
             {
                 uint64_t key = uint64_t(s.blend) | uint64_t(s.colorMask) << 1 | uint64_t(s.srcRgb & 0xFFFF) << 8 |
@@ -863,7 +877,7 @@ namespace spfx::gl
                 // follows GL unless GOSR_SPFX_NOCULL is set.
                 static const bool noCull = GetEnvironmentVariableW(L"GOSR_SPFX_NOCULL", nullptr, 0) != 0;
                 D3D11_CULL_MODE cull = D3D11_CULL_NONE;
-                if (s.cull && !noCull)
+                if (s.cull && !noCull && !(coinDraw143 && GetEnvironmentVariableW(L"GOSR_COIN_NOCULL", nullptr, 0)))
                     cull = s.cullFace == 0x0404 ? D3D11_CULL_FRONT : s.cullFace == 0x0405 ? D3D11_CULL_BACK : D3D11_CULL_NONE;
                 bool ccw = (s.frontFace == 0x0901) != g_flipCameraY;
                 uint32_t key = uint32_t(cull) | (ccw ? 16 : 0);
@@ -1231,6 +1245,13 @@ namespace spfx::gl
 
     // ---------------------------------------------------------------- drawing
 
+    bool WidenByteIndices143(const std::vector<uint8_t>& source, uint64_t offset, size_t count, std::vector<uint16_t>& output)
+    {
+        if (offset > source.size() || count > source.size() - size_t(offset) || count > UINT32_MAX / sizeof(uint16_t) || !count) return false;
+        output.assign(source.begin() + size_t(offset), source.begin() + size_t(offset) + count);
+        return true;
+    }
+
     void Draw(uint32_t mode, int32_t first, int32_t count, uint32_t indexType, uint64_t indices)
     {
         State& s = GetState();
@@ -1244,6 +1265,51 @@ namespace spfx::gl
         GpuProgram* g = Prepare(s.currentProgram, p);
         if (!g)
             return;
+
+        const bool coinDraw143 = CoinDraw143(p, s);
+        if (coinDraw143)
+        {
+            static std::map<uint32_t, int> snapshots;
+            if (snapshots.size() < 64 && snapshots[s.currentProgram]++ < 2)
+            {
+                Log("COIN DRAW prog %u mode %x count %d index %x cull %d face %x front %x depth %d func %x write %d blend %d src %x dst %x mask %x", s.currentProgram, mode, count, indexType, int(s.cull), s.cullFace, s.frontFace, int(s.depthTest), s.depthFunc, int(s.depthMask), int(s.blend), s.srcRgb, s.dstRgb, s.colorMask);
+                CreateDirectoryA("gosr_coin_draw", nullptr);
+                char path[160];
+                snprintf(path, sizeof path, "gosr_coin_draw/p%u.vs", s.currentProgram);
+                if (FILE* file = fopen(path, "w")) { fputs(p.vertexSource.c_str(), file); fclose(file); }
+                snprintf(path, sizeof path, "gosr_coin_draw/p%u.fs", s.currentProgram);
+                if (FILE* file = fopen(path, "w")) { fputs(p.fragmentSource.c_str(), file); fclose(file); }
+                snprintf(path, sizeof path, "gosr_coin_draw/p%u-state.txt", s.currentProgram);
+                if (FILE* file = fopen(path, "w"))
+                {
+                    for (size_t i = 0; i < p.uniforms.size(); ++i)
+                    {
+                        const auto& u = p.uniforms[i]; const auto& slot = g->slots[i];
+                        fprintf(file, "%s vs=%d ps=%d floats=%d array=%d sampler=%d", u.name.c_str(), slot.vsOffset, slot.psOffset, u.floats, u.arraySize, u.samplerUnit);
+                        for (size_t j = 0; j < u.values.size() && j < 128; ++j) fprintf(file, " %g", double(u.values[j]));
+                        fputc('\n', file);
+                    }
+                    auto& vao143 = s.vao();
+                    for (size_t i = 0; i < g->attributes.size() && i < kMaxAttribs; ++i)
+                    {
+                        const auto& a = vao143.attribs[i];
+                        fprintf(file, "attrib %zu %s enabled=%d buffer=%u size=%d type=%x stride=%d offset=%llu\n", i, g->attributes[i].c_str(), int(a.enabled), a.buffer, a.size, a.type, a.stride, static_cast<unsigned long long>(a.offset));
+                        auto it = s.buffers.find(a.buffer);
+                        if (it != s.buffers.end())
+                        {
+                            unsigned stride = a.stride ? unsigned(a.stride) : TypeSize(a.type) * unsigned(a.size);
+                            for (unsigned v = 0; v < 6 && a.offset + size_t(v)*stride + TypeSize(a.type)*unsigned(a.size) <= it->second.data.size(); ++v)
+                            {
+                                fprintf(file, "  vertex %u", v);
+                                for (int c = 0; c < a.size; ++c) fprintf(file, " %g", double(ReadComponent(it->second.data.data()+a.offset+size_t(v)*stride+c*TypeSize(a.type), a.type, a.normalized)));
+                                fputc('\n', file);
+                            }
+                        }
+                    }
+                    fclose(file);
+                }
+            }
+        }
 
         // constant buffers and textures
         ID3D11ShaderResourceView* vsSrv[16] = {}, * psSrv[16] = {};
@@ -1280,8 +1346,11 @@ namespace spfx::gl
                 params = &s.samplers[tu.sampler].params;
             ID3D11SamplerState* smp = SamplerFor(params ? *params : none, mip);
             static const bool trace = GetEnvironmentVariableW(L"GOSR_SPFX_TRACE_DRAWS", nullptr, 0) != 0;
-            if (trace && g_draws < 200)
+            static std::vector<std::string> traced143;
+            std::string key143 = std::to_string(s.currentProgram) + ":" + u.name + ":" + std::to_string(texName);
+            if (trace && traced143.size() < 512 && std::find(traced143.begin(), traced143.end(), key143) == traced143.end())
             {
+                traced143.push_back(key143);
                 auto t = s.textures.find(texName);
                 Log("  draw %llu prog %u %s unit %u tex %u %s %ux%u fmt 0x%x levels %zu srv %p", static_cast<unsigned long long>(g_draws),
                     s.currentProgram, u.name.c_str(), unit, texName, t == s.textures.end() ? "MISSING" : "ok",
@@ -1457,14 +1526,31 @@ namespace spfx::gl
         if (vsSmpCount) g_context->VSSetSamplers(0, vsSmpCount, vsSmp);
         if (psSrvCount) g_context->PSSetShaderResources(0, psSrvCount, psSrv);
         if (psSmpCount) g_context->PSSetSamplers(0, psSmpCount, psSmp);
-        ApplyFixedFunction(s);
+        ApplyFixedFunction(s, coinDraw143);
         if (indexBuffer)
         {
-            ID3D11Buffer* ib = BufferFor(vao.elementBuffer, D3D11_BIND_INDEX_BUFFER);
-            if (!ib || indexSize == 1)
-                return;
+            Com<ID3D11Buffer> widened;
+            ID3D11Buffer* ib = nullptr;
+            UINT startIndex = UINT(indices / indexSize);
+            if (indexSize == 1)
+            {
+                std::vector<uint16_t> converted;
+                if (!WidenByteIndices143(indexBuffer->data, indices, size_t(count), converted)) return;
+                D3D11_BUFFER_DESC desc = {};
+                desc.ByteWidth = UINT(converted.size() * sizeof(uint16_t));
+                desc.Usage = D3D11_USAGE_IMMUTABLE;
+                desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+                D3D11_SUBRESOURCE_DATA initial = { converted.data(), 0, 0 };
+                if (FAILED(g_device->CreateBuffer(&desc, &initial, widened.put()))) return;
+                ib = widened.get();
+                startIndex = 0;
+                static bool logged = false;
+                if (!logged) { Log("8-bit GL indices widened to 16-bit: program %u, count %d", s.currentProgram, count); logged = true; }
+            }
+            else ib = BufferFor(vao.elementBuffer, D3D11_BIND_INDEX_BUFFER);
+            if (!ib) return;
             g_context->IASetIndexBuffer(ib, indexSize == 4 ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R16_UINT, 0);
-            g_context->DrawIndexed(UINT(count), UINT(indices / indexSize), 0);
+            g_context->DrawIndexed(UINT(count), startIndex, 0);
         }
         else
             g_context->Draw(UINT(count), UINT(first));

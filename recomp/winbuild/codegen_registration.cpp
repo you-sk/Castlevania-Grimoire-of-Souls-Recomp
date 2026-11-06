@@ -37,13 +37,13 @@ namespace
 {
     // Offsets in the macOS v1.4.2 arm64 GameAssembly, taken from its own
     // registration function (s_Il2CppCodegenRegistration at 0x125314).
-    constexpr uint64_t kCodeRegistration = 0x3ad2790;
-    constexpr uint64_t kMetadataRegistration = 0x3ad3308;
+    constexpr uint64_t kCodeRegistration = 0x3b029b0;
+    constexpr uint64_t kMetadataRegistration = 0x3b03528;
 #ifndef GOSR_BUILD_TAG
 #define GOSR_BUILD_TAG "dev"
 #endif
 
-    constexpr uint64_t kCodeGenOptions = 0x352a250;
+    constexpr uint64_t kCodeGenOptions = 0x3558c10;
 
     recomp::MachOImage* g_image = nullptr;
 
@@ -94,7 +94,7 @@ namespace
         // Point the registration tables at native entry thunks for the
         // recompiled code before libil2cpp reads them.
         recomp::InstallBridges();
-        recomp::InstallDebugMenu(g_image->Base());
+        // Diagnostic build: legacy debug menu and its progress-changing hooks are excluded.
         recomp::RegisterRuntimeImports();
         recomp::RegisterExceptionImports();
 

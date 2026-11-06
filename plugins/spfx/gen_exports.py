@@ -27,7 +27,7 @@ HOOKS = {"SPFX_PLUGIN_Instance_Create": "TextureInfo = spfx::gl::NativeTextureNa
          "SPFX_PLUGIN_SetDrawParameter": "spfx::gl::NoteDrawParameter(CameraID, Parameter);"}
 
 # host bookkeeping after the guest returns (c.x[0] holds its result)
-POSTHOOKS = {"SPFX_PLUGIN_Instance_Create": "spfx::NoteInstanceCreated(reinterpret_cast<void*>(c.x[0]), reinterpret_cast<const char*>(FileName));",
+POSTHOOKS = {"SPFX_PLUGIN_Instance_Create": "spfx::NoteInstanceCreated(reinterpret_cast<void*>(c.x[0]), reinterpret_cast<const char*>(FileName)); spfx::NoteCoinCreated143(reinterpret_cast<void*>(c.x[0]), reinterpret_cast<const char*>(FileName), ResourceLength, InstanceID, TextureInfo, TextureInfoCount);",
              "SPFX_PLUGIN_Instance_GetStatus": "spfx::NoteInstanceStatus(Handle, int32_t(c.x[0]));"}
 
 # exports the host wraps itself (spfx_host.cpp)
@@ -78,7 +78,12 @@ for line in open(externs):
     body += stack_writes
     fmt = ", ".join(("%g" if kind == "float" else "0x%llx") for _, kind, _, _ in args)
     vals = "".join(f", double({n})" if kind == "float" else (f", (unsigned long long)reinterpret_cast<uintptr_t>({n})" if c.endswith("*") else f", (unsigned long long)uint64_t({n})") for c, kind, _, n in args)
-    body.append(f'    if (spfx::TraceCalls()) spfx::Log("{name}({fmt})"{vals});')
+    trace_condition = "spfx::TraceCalls()"
+    if name.startswith("SPFX_PLUGIN_Instance_") and any(n == "Handle" for _, _, _, n in args) and "Get" not in name:
+        trace_condition += " || spfx::TraceCoinHandle143(Handle)"
+    body.append(f'    if ({trace_condition}) spfx::Log("{name}({fmt})"{vals});')
+    if name == "SPFX_PLUGIN_Instance_SetTransform":
+        body.append('    if (WorldMatrix && spfx::TraceCoinHandle143(Handle)) spfx::Log("COIN matrix %p scale %g %g %g pos %g %g %g", Handle, double(WorldMatrix[0]), double(WorldMatrix[5]), double(WorldMatrix[10]), double(WorldMatrix[12]), double(WorldMatrix[13]), double(WorldMatrix[14]));')
     body.append(f"    f_{guest:x}(c);")
     if name in POSTHOOKS:
         body.append(f"    {POSTHOOKS[name]}")

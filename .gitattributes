@@ -1,4 +1,6 @@
 * text=auto
 *.bat text eol=crlf
+*.sh text eol=lf
+*.py text eol=lf
 packaging/windows/*.txt text eol=crlf
 packaging/windows/*.ini text eol=crlf

@@ -1,5 +1,14 @@
 # GoSRecomp
 
+> **This branch: experimental macOS 1.4.3 / build 105 source port.**
+> Read [PORTING-1.4.3.md](PORTING-1.4.3.md) for the tested scope, Unity
+> 2020.3.49f1 build steps and isolated Windows launcher. No 1.4.3 game binaries,
+> assets, dumps, saves or receipts are distributed here. The upstream 1.4.2
+> installation/release instructions below are historical and do not install
+> this 1.4.3 port.
+>
+> 日本語: [1.4.3対応状況と起動条件](PORTING-1.4.3.ja.md)
+
 Castlevania: Grimoire of Souls (Apple Arcade, macOS) running natively on Windows.
 Same idea as [Unleashed Recompiled](https://github.com/hedge-dev/UnleashedRecomp).
 

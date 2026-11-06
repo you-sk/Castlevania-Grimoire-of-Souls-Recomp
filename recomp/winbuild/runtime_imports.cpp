@@ -1,3 +1,8 @@
+#include <new>
+#include "icalls/mscorlib/System.Runtime.InteropServices/Marshal.h"
+#include "icalls/System/System.Net.Sockets/Socket.h"
+#include "icalls/mscorlib/System/Environment.h"
+#include "icalls/mscorlib/System.IO/MonoIO.h"
 // Calls from recompiled game code into the native libil2cpp runtime.
 //
 // Each handler reads arm64 arguments (x0-x7) from the Ctx, calls the native
@@ -5,11 +10,8 @@
 // published first, so native code calling back into game code continues
 // below the current guest frame.
 //
-// Addresses are runtime functions in the macOS v1.4.2 arm64 GameAssembly,
-// identified as documented in docs/RECOMP_DESIGN.md: the out-of-line helpers
-// of codegen/il2cpp-codegen-il2cpp.cpp (0x192c54-0x1931a0, in source order),
-// plus the few libil2cpp internals and corlib icalls generated code calls
-// directly.
+// Addresses below are verified for macOS 1.4.3 build 105 and Unity
+// 2020.3.49f1. Native endpoints replace platform-owned Darwin implementations.
 #include <atomic>
 #include <mutex>
 #include <unordered_map>
@@ -39,6 +41,9 @@
 
 namespace recomp
 {
+    void f_3a3c0c(Ctx& c);
+    void f_2b5c(Ctx& c);
+    void ClangCallTerminate143(Ctx& c);
     void RegisterIcallSignature(const char* icall, void* target);  // icall_marshal.cpp
     void* WrapInputIcall(const char* name, void* original);         // mouse_keys.cpp
     void* WrapDisplayIcall(const char* name, void* original);       // display.cpp
@@ -156,6 +161,13 @@ namespace
     }
 
     void ComUnsupported(Ctx& c) { Unsupported(c, "COM interop"); }
+
+    // The guest checks and raises initialization errors after Class::Init.
+    void ClassInitFromCodegen143(Ctx& c)
+    {
+        Enter(c);
+        c.x[0] = il2cpp::vm::ClassInlines::InitFromCodegenSlow(Arg<Il2CppClass*>(c, 0)) ? 1 : 0;
+    }
 
     void ClassInit(Ctx& c)
     {
@@ -650,8 +662,8 @@ namespace recomp
         static IntGetter target = reinterpret_cast<IntGetter>(il2cpp::vm::InternalCalls::Resolve("UnityEngine.Application::get_targetFrameRate()"));
         if (!frame || !rendered)
             return;
-        // TimeManager fields read by StepFixedTime (UnityPlayer 2020.3.30f1 x64:
-        // GetTimeManager at RVA 0x5429f0)
+        // TimeManager fields read by StepFixedTime (UnityPlayer 2020.3.49f1 x64 (official PDB):
+        // GetTimeManager at RVA 0x501480)
         if (!frame || !rendered || frame() < 1)
             return;  // engine managers do not exist before the first frame
         static bool layoutChecked = false;
@@ -679,7 +691,7 @@ namespace recomp
         if (HMODULE player = GetModuleHandleW(L"UnityPlayer.dll"))
         {
             using GetManager = uint8_t* (*)();
-            uint8_t* tm = reinterpret_cast<GetManager>(reinterpret_cast<uint8_t*>(player) + 0x5429f0)();
+            uint8_t* tm = reinterpret_cast<GetManager>(reinterpret_cast<uint8_t*>(player) + 0x501480)();
             if (tm)
             {
                 double fixedCur, dynCur, d40, d70;
@@ -715,93 +727,154 @@ namespace recomp
                 time ? time() : -1.0, target ? target() : -1);
     }
 
+    // 1.4.3 helper 0x2f40: uint32 bounds test, full-width index arithmetic.
+    void ArrayStoreRef143(Il2CppArray* array, uint64_t index, Il2CppObject* value)
+    {
+        static_assert(offsetof(Il2CppArray, max_length) == 0x18);
+        static_assert(kIl2CppSizeOfArray == 0x20);
+        IL2CPP_ARRAY_BOUNDS_CHECK(index, array->max_length);
+        auto** slot = reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(array) + kIl2CppSizeOfArray + index * sizeof(void*));
+        *slot = value;
+        Il2CppCodeGenWriteBarrier(slot, value);
+    }
+
+    void* ArrayElementAddress376143(Il2CppArray* array, uint64_t index)
+    {
+        IL2CPP_ARRAY_BOUNDS_CHECK(index, array->max_length);
+        return reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(array) + kIl2CppSizeOfArray + index * 0x178);
+    }
+
+    static_assert(sizeof(il2cpp::vm::ScopedThreadAttacher) == sizeof(void*));
+    void* ScopedThreadAttach143(void* storage)
+    {
+        return new (storage) il2cpp::vm::ScopedThreadAttacher();
+    }
+    void* ScopedThreadDetach143(void* storage)
+    {
+        static_cast<il2cpp::vm::ScopedThreadAttacher*>(storage)->~ScopedThreadAttacher();
+        return storage;
+    }
+
     void RegisterRuntimeImports()
     {
-        g_sampleStateHook = &PrintEngineState;
-        if (!getenv("GOSR_NO_TRACE"))
-            AddVectoredExceptionHandler(1, OnNativeThrow);
-        // codegen/il2cpp-codegen-common.cpp
-        RegisterImport(0x192c54, NoReturn);
-        RegisterImport(0x192c58, WriteBarrier);
-        // codegen/il2cpp-codegen-il2cpp.cpp
-        RegisterImport(0x192c5c, N<il2cpp_codegen_marshal_store_last_error>);
-        RegisterImport(0x192c60, N<il2cpp_codegen_delegate_begin_invoke>);
-        RegisterImport(0x192c64, N<il2cpp_codegen_delegate_end_invoke>);
-        RegisterImport(0x192c68, N<ResolveIcallOrStub>);
-        RegisterImport(0x192c9c, N<il2cpp_codegen_type_get_object>);
-        RegisterImport(0x192ca0, N<il2cpp_codegen_get_executing_assembly>);
-        RegisterImport(0x192cb4, N<il2cpp_codegen_initialize_runtime_metadata>);
-        RegisterImport(0x192cb8, N<il2cpp_codegen_initialize_runtime_metadata_inline>);
-        RegisterImport(0x192cbc, N<il2cpp_codegen_get_thread_static_data>);
-        RegisterImport(0x192cc4, N<il2cpp_codegen_memory_barrier>);
-        RegisterImport(0x192cc8, N<SZArrayNew>);
-        RegisterImport(0x192cd0, N<GenArrayNew>);
-        RegisterImport(0x192cd8, N<il2cpp_codegen_method_is_generic_instance>);
-        RegisterImport(0x192cdc, N<il2cpp_codegen_method_get_declaring_type>);
-        RegisterImport(0x192ce0, N<MethodIsStatic>);
-        RegisterImport(0x192cf8, N<il2cpp_codegen_raise_profile_exception>);
-        RegisterImport(0x192d50, RaiseExceptionTraced);
-        RegisterImport(0x192d5c, N<il2cpp_codegen_get_generic_virtual_method_internal>);
-        RegisterImport(0x192d60, N<il2cpp_codegen_runtime_class_init>);
-        RegisterImport(0x192d64, N<il2cpp_codegen_raise_execution_engine_exception>);
-        RegisterImport(0x192d68, N<il2cpp_codegen_raise_execution_engine_exception_if_method_is_not_found>);
-        RegisterImport(0x192d6c, N<IsInst>);
-        RegisterImport(0x192d70, N<Box>);
-        RegisterImport(0x192d74, N<Unbox_internal>);
-        RegisterImport(0x192d78, N<UnBoxNullable_internal>);
-        RegisterImport(0x192d7c, N<il2cpp_codegen_object_new>);
-        RegisterImport(0x192d80, N<static_cast<void* (*)(size_t)>(il2cpp_codegen_marshal_allocate)>);
-        RegisterImport(0x192d84, RaiseNullReference);
-        RegisterImport(0x192d90, N<il2cpp_codegen_get_argument_null_exception>);
-        RegisterImport(0x192d94, N<il2cpp_codegen_get_overflow_exception>);
-        RegisterImport(0x192da0, N<il2cpp_codegen_get_array_type_mismatch_exception>);
-        RegisterImport(0x192da4, N<il2cpp_codegen_get_marshal_directive_exception>);
-        RegisterImport(0x192da8, N<il2cpp_codegen_get_missing_method_exception>);
-        RegisterImport(0x192dac, N<il2cpp_codegen_get_index_out_of_range_exception>);
-        for (uint64_t com : { 0x192db0, 0x192db4, 0x192db8, 0x192dd8, 0x192ddc, 0x192de0, 0x192e7c, 0x192eb8 })
-            RegisterImport(com, ComUnsupported);
-        RegisterImport(0x192ebc, N<il2cpp_codegen_string_new_wrapper>);
-        RegisterImport(0x192ec0, N<GetType3>);
-        RegisterImport(0x192f70, N<GetType4>);
-        RegisterImport(0x19302c, N<GetType5>);
-        RegisterImport(0x1930f4, N<RaiseInvalidCastException>);
-        RegisterImport(0x193154, N<MethodIsInterfaceMethod>);
-        RegisterImport(0x193168, N<ClassIsAssignableFrom>);
-        RegisterImport(0x19316c, N<il2cpp_codegen_class_from_type_internal>);
-        RegisterImport(0x193174, N<MarshalString>);
-        RegisterImport(0x193178, N<MarshalStringFixed>);
-        RegisterImport(0x19317c, N<MarshalWStringFixed>);
-        RegisterImport(0x193180, N<MarshalStringResult>);
-        RegisterImport(0x193184, N<MarshalWStringResult>);
-        RegisterImport(0x193188, N<MarshalEmptyWStringBuilder>);
-        RegisterImport(0x19318c, N<MarshalWStringBuilder>);
-        RegisterImport(0x193190, N<MarshalWStringBuilderResult>);
-        RegisterImport(0x193194, N<MarshalFree>);
-        RegisterImport(0x193198, N<MarshalDelegate>);
-        RegisterImport(0x19319c, N<il2cpp_codegen_marshal_function_ptr_to_delegate_internal>);
-        RegisterImport(0x1931a0, Resolve);
-
-        // libil2cpp internals called directly by generated code
-        RegisterImport(0x12fd8c, ClassInit);
-        RegisterImport(0x130030, N<InterfaceInvokeDataSlowPath>);
-        RegisterImport(0x146764, ThreadAttacherCtor);
-        RegisterImport(0x1467fc, ThreadAttacherDtor);
-        RegisterImport(0x18f3e4, WriteBarrier);  // GarbageCollector::SetWriteBarrier
-
-        // corlib icalls and MonoPosixHelper exports bound at build time
-        RegisterImport(0x189294, N<CreateZStream>);
-        RegisterImport(0x1893b0, N<CloseZStream>);
-        RegisterImport(0x1894a4, N<Flush>);
-        RegisterImport(0x189530, N<ReadZStream>);
-        RegisterImport(0x189608, N<WriteZStream>);
-        RegisterImport(0x18ac84, N<il2cpp::icalls::System::System::IOSelector::Add>);
-        RegisterImport(0x18b9d8, N<ves_icall_System_Threading_ThreadPool_InitializeVMTp>);
-        RegisterImport(0x18b9e4, N<ves_icall_System_Threading_ThreadPool_NotifyWorkItemComplete>);
-        RegisterImport(0x18c428, N<ves_icall_System_Threading_ThreadPool_NotifyWorkItemProgressNative>);
-        RegisterImport(0x18c49c, N<ves_icall_System_Threading_ThreadPool_ReportThreadStatus>);
-        RegisterImport(0x18c4a0, N<ves_icall_System_Threading_ThreadPool_RequestWorkerThread>);
-        RegisterImport(0x18c834, N<ves_icall_System_Threading_ThreadPool_IsThreadPoolHosted>);
-
+        // Verified 1.4.3 bindings only. Legacy guest addresses are deliberately unregistered.
+        g_sampleStateHook = nullptr; // Private UnityPlayer field layout is not validated yet.
+        using native::N;
+        RegisterImport(0x197ee4, N<il2cpp_codegen_initialize_runtime_metadata>);
+        RegisterImport(0x197ee8, N<il2cpp_codegen_initialize_runtime_metadata_inline>);
+        RegisterImport(0x197e98, N<ResolveIcallOrStub>);
+        RegisterImport(0x1983d0, N<il2cpp_codegen_marshal_function_ptr_to_delegate_internal>);
+        RegisterImport(0x132454, ClassInitFromCodegen143);
+        RegisterImport(0x1327e8, N<InterfaceInvokeDataSlowPath>);
+        RegisterImport(0x18e2ac, N<CreateZStream>);
+        RegisterImport(0x18e3d4, N<CloseZStream>);
+        RegisterImport(0x18e4c8, N<Flush>);
+        RegisterImport(0x18e560, N<ReadZStream>);
+        RegisterImport(0x18e678, N<WriteZStream>);
+        RegisterImport(0x197ecc, N<il2cpp_codegen_type_get_object>);
+        RegisterImport(0x197ef8, N<SZArrayNew>);
+        RegisterImport(0x197f00, N<GenArrayNew>);
+        RegisterImport(0x197f0c, N<il2cpp_codegen_method_get_declaring_type>);
+        RegisterImport(0x197fa0, N<Box>);
+        RegisterImport(0x197fa4, N<Unbox_internal>);
+        RegisterImport(0x1983a0, N<il2cpp_codegen_class_from_type_internal>);
+        RegisterImport(0x197fb4, N<il2cpp_codegen_raise_null_reference_exception>);
+        RegisterImport(0x197f90, N<il2cpp_codegen_runtime_class_init>);
+        RegisterImport(0x197fac, N<il2cpp_codegen_object_new>);
+        RegisterImport(0x197f80, N<static_cast<void (*)(Exception_t*, MethodInfo*)>(il2cpp_codegen_raise_exception)>);
+        RegisterImport(0x197f9c, N<IsInst>);
+        RegisterImport(0x197fe0, N<il2cpp_codegen_get_index_out_of_range_exception>);
+        RegisterImport(0x197fd4, N<il2cpp_codegen_get_array_type_mismatch_exception>);
+        RegisterImport(0x19839c, N<ClassIsAssignableFrom>);
+        RegisterImport(0x198328, N<RaiseInvalidCastException>);
+        RegisterImport(0x197f8c, N<il2cpp_codegen_get_generic_virtual_method_internal>);
+        RegisterImport(0x2b8c, recomp::ClangCallTerminate143);
+        RegisterImport(0x2c70, N<NullCheck>);
+        RegisterImport(0x2f08, N<ArrayElementTypeCheck>);
+        RegisterImport(0x197fc0, N<il2cpp_codegen_get_argument_exception>);
+        RegisterImport(0x197e90, N<il2cpp_codegen_delegate_begin_invoke>);
+        RegisterImport(0x197e94, N<il2cpp_codegen_delegate_end_invoke>);
+        RegisterImport(0x197f98, N<il2cpp_codegen_raise_execution_engine_exception_if_method_is_not_found>);
+        RegisterImport(0x2f40, N<ArrayStoreRef143>);
+        RegisterImport(0x1983d4, Resolve);
+        RegisterImport(0x197f28, N<il2cpp_codegen_raise_profile_exception>);
+        RegisterImport(0x4610, N<ArrayStoreRef143>);
+        RegisterImport(0x3520, N<ArrayElementAddress376143>);
+        RegisterImport(0x6c78, N<static_cast<void* (*)(RuntimeObject*, RuntimeClass*)>(UnBox)>);
+        RegisterImport(0x197eec, N<il2cpp_codegen_get_thread_static_data>);
+        RegisterImport(0xf218, N<CastclassClass>);
+        RegisterImport(0x112ad4, N<&il2cpp::icalls::mscorlib::System::IO::MonoIO::get_AltDirectorySeparatorChar>);
+        RegisterImport(0x112cdc, N<&il2cpp::icalls::mscorlib::System::IO::MonoIO::get_DirectorySeparatorChar>);
+        RegisterImport(0x112f84, N<&il2cpp::icalls::mscorlib::System::IO::MonoIO::get_PathSeparator>);
+        RegisterImport(0x1130ac, N<&il2cpp::icalls::mscorlib::System::IO::MonoIO::get_VolumeSeparatorChar>);
+        RegisterImport(0x11cc98, N<&il2cpp::icalls::mscorlib::System::Environment::get_Platform>);
+        RegisterImport(0x1a300, N<Castclass>);
+        RegisterImport(0x1980f0, N<il2cpp_codegen_string_new_wrapper>);
+        RegisterImport(0x1980f4, N<GetType3>);
+        RegisterImport(0x1981a4, N<GetType4>);
+        RegisterImport(0x198260, N<GetType5>);
+        RegisterImport(0x3a3d8c, recomp::f_3a3c0c);
+        RegisterImport(0x3a3d1c, recomp::f_3a3c0c);
+        RegisterImport(0x3a3cac, recomp::f_3a3c0c);
+        RegisterImport(0x3a59fc, recomp::f_3a3c0c);
+        RegisterImport(0x3a41e0, recomp::f_3a3c0c);
+        RegisterImport(0x1a4b4, N<ArrayStoreRef143>);
+        RegisterImport(0x3a66d4, N<ArrayStoreRef143>);
+        RegisterImport(0x3a4100, recomp::f_3a3c0c);
+        RegisterImport(0x3a518c, recomp::f_3a3c0c);
+        RegisterImport(0x3a55d0, recomp::f_3a3c0c);
+        RegisterImport(0x3a4e80, recomp::f_3a3c0c);
+        RegisterImport(0x3a4170, recomp::f_3a3c0c);
+        RegisterImport(0x3a60e4, recomp::f_3a3c0c);
+        RegisterImport(0x3a578c, recomp::f_3a3c0c);
+        RegisterImport(0x3a6a2c, recomp::f_3a3c0c);
+        RegisterImport(0x3a4f70, recomp::f_3a3c0c);
+        RegisterImport(0x4104c, N<ArrayStoreRef143>);
+        RegisterImport(0x3bb458, recomp::f_3a3c0c);
+        RegisterImport(0x3a6ca8, N<ArrayStoreRef143>);
+        RegisterImport(0x3a40cc, N<ArrayStoreRef143>);
+        RegisterImport(0x2c4e4, N<ArrayStoreRef143>);
+        RegisterImport(0x3cc908, recomp::f_3a3c0c);
+        RegisterImport(0x3a6240, N<ArrayStoreRef143>);
+        RegisterImport(0x3a6878, recomp::f_3a3c0c);
+        RegisterImport(0x3a6a9c, recomp::f_3a3c0c);
+        RegisterImport(0x3a50a8, N<ArrayStoreRef143>);
+        RegisterImport(0x3a4504, recomp::f_3a3c0c);
+        RegisterImport(0x3a6738, recomp::f_3a3c0c);
+        RegisterImport(0x6ab40, N<ArrayStoreRef143>);
+        RegisterImport(0x3a4fe0, N<ArrayStoreRef143>);
+        RegisterImport(0x1983cc, N<MarshalDelegate>);
+        RegisterImport(0x197ed0, N<il2cpp_codegen_get_executing_assembly>);
+        RegisterImport(0x112ee0, N<&il2cpp::icalls::mscorlib::System::IO::MonoIO::GetFileType>);
+        RegisterImport(0x112bd0, N<&il2cpp::icalls::mscorlib::System::IO::MonoIO::get_ConsoleError>);
+        RegisterImport(0x112bd4, N<&il2cpp::icalls::mscorlib::System::IO::MonoIO::get_ConsoleInput>);
+        RegisterImport(0x112bd8, N<&il2cpp::icalls::mscorlib::System::IO::MonoIO::get_ConsoleOutput>);
+        RegisterImport(0x197fc8, N<il2cpp_codegen_get_overflow_exception>);
+        RegisterImport(0x197fc4, N<il2cpp_codegen_get_argument_null_exception>);
+        RegisterImport(0x197fd8, N<il2cpp_codegen_get_marshal_directive_exception>);
+        RegisterImport(0x197fdc, N<il2cpp_codegen_get_missing_method_exception>);
+        RegisterImport(0x1983a8, N<MarshalString>);
+        RegisterImport(0x1983ac, N<MarshalStringFixed>);
+        RegisterImport(0x1983b4, N<MarshalStringResult>);
+        RegisterImport(0x1983b8, N<MarshalWStringResult>);
+        RegisterImport(0x1983c4, N<MarshalWStringBuilderResult>);
+        RegisterImport(0x197e8c, N<il2cpp_codegen_marshal_store_last_error>);
+        RegisterImport(0x197fe4, N<il2cpp_codegen_com_marshal_safe_array>);
+        RegisterImport(0x197fe8, N<il2cpp_codegen_com_marshal_safe_array_result>);
+        RegisterImport(0x197fec, N<il2cpp_codegen_com_destroy_safe_array>);
+        RegisterImport(0x19800c, N<il2cpp_codegen_com_get_or_create_ccw_internal>);
+        RegisterImport(0x198010, N<il2cpp_codegen_com_get_or_create_rcw_from_iunknown_internal>);
+        RegisterImport(0x198014, N<il2cpp_codegen_com_query_interface_internal>);
+        RegisterImport(0x1980b0, N<il2cpp_codegen_com_cache_queried_interface>);
+        RegisterImport(0x1980ec, N<il2cpp_codegen_il2cpp_com_object_cleanup>);
+        RegisterImport(0x197f94, N<il2cpp_codegen_raise_execution_engine_exception>);
+        RegisterImport(0x110684, N<il2cpp::icalls::System::System::Net::Sockets::Socket::Send40>);
+        RegisterImport(0x11041c, N<il2cpp::icalls::System::System::Net::Sockets::Socket::ReceiveArray40>);
+        RegisterImport(0x1105b4, N<il2cpp::icalls::System::System::Net::Sockets::Socket::SendArray40>);
+        RegisterImport(0x1104ec, N<il2cpp::icalls::System::System::Net::Sockets::Socket::Receive40>);
+        RegisterImport(0x1167c0, N<il2cpp::icalls::mscorlib::System::Runtime::InteropServices::Marshal::PtrToStructure>);
+        RegisterImport(0x1498c0, N<ScopedThreadAttach143>);
+        RegisterImport(0x149958, N<ScopedThreadDetach143>);
         RegisterLibcImports();
         RegisterIcallImports();
     }

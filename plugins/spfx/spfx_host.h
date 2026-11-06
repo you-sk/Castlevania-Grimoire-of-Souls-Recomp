@@ -39,6 +39,8 @@ namespace spfx
 
     // GOSR_SPFX_TRACE: log every call the game makes into the plugin
     bool TraceCalls();
+    void NoteCoinCreated143(void*, const char*, int32_t, int32_t, void* const*, int32_t);
+    bool TraceCoinHandle143(void*);
 
     // Registration of the import groups (each in its own file).
     void RegisterLibcImports();
@@ -49,6 +51,7 @@ namespace spfx
 namespace spfx::gl
 {
     // Around the plugin's drawing for one camera (gl_d3d11.cpp)
+    void MarkCoinTexture143(uint32_t texture);
     void BeginCameraDraw(int32_t camera);
     void EndCameraDraw();
 }

@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <cstdarg>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -19,6 +20,28 @@
 #include "macho_image.h"
 #include "recomp_bridge.h"
 #include "unity_interfaces.h"
+
+namespace
+{
+    void SpfxAbortStack143(int)
+    {
+        fprintf(stderr, "SPFX abort stack:\n");
+        void* frames[48];
+        USHORT count = CaptureStackBackTrace(0, 48, frames, nullptr);
+        for (USHORT i = 0; i < count; ++i)
+        {
+            HMODULE module = nullptr;
+            char path[MAX_PATH] = {};
+            if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                  reinterpret_cast<LPCSTR>(frames[i]), &module))
+                GetModuleFileNameA(module, path, MAX_PATH);
+            const char* name = strrchr(path, '\\');
+            fprintf(stderr, "  %s+0x%llx\n", name ? name + 1 : path,
+                    static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(frames[i]) - reinterpret_cast<uintptr_t>(module)));
+        }
+        fflush(stderr);
+    }
+}
 
 namespace spfx
 {
@@ -256,6 +279,9 @@ namespace spfx
     {
         static std::mutex lock;
         static FILE* f = [] {
+            freopen("gosr_spfx_stderr.log", "w", stderr);
+            setvbuf(stderr, nullptr, _IONBF, 0);
+            std::signal(SIGABRT, SpfxAbortStack143);
             FILE* file = fopen("gosr_spfx.log", "w");
             return file ? file : stderr;
         }();
@@ -272,6 +298,47 @@ namespace spfx
     }
 
     IUnityInterfaces* RealInterfaces() { return g_realInterfaces; }
+
+
+    // Opt-in, bounded diagnostics for the confirmed coin resources only.
+    struct CoinTrace143 { unsigned remaining; int status; };
+    std::mutex g_coinLock143;
+    std::unordered_map<void*, CoinTrace143> g_coins143;
+    bool CoinTraceEnabled143()
+    {
+        static bool enabled = GetEnvironmentVariableW(L"GOSR_SPFX_TRACE_COINS", nullptr, 0) != 0;
+        return enabled;
+    }
+    void NoteCoinCreated143(void* handle, const char* file, int32_t bytes, int32_t id, void* const* textures, int32_t count)
+    {
+        if (!CoinTraceEnabled143() || !file || (!strstr(file, "eff_obj_2502") && !strstr(file, "eff_obj_2503"))) return;
+        std::lock_guard<std::mutex> lock(g_coinLock143);
+        if (g_coins143.size() >= 1024) return;
+        g_coins143[handle] = {64, -999};
+        if ((strstr(file, "eff_obj_2502") || strstr(file, "eff_obj_2503")) && textures && count > 0)
+            gl::MarkCoinTexture143(uint32_t(reinterpret_cast<uintptr_t>(textures[0])));
+        Log("COIN create %s handle %p bytes %d id %d textures %d", file, handle, bytes, id, count);
+        for (int32_t i = 0; textures && i < count && i < 16; ++i)
+            Log("COIN texture[%d] GL-name %llu", i, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(textures[i])));
+    }
+    bool TraceCoinHandle143(void* handle)
+    {
+        if (!CoinTraceEnabled143()) return false;
+        std::lock_guard<std::mutex> lock(g_coinLock143);
+        auto it = g_coins143.find(handle);
+        return it != g_coins143.end() && it->second.remaining && it->second.remaining--;
+    }
+    void NoteCoinStatus143(void* handle, int32_t status)
+    {
+        if (!CoinTraceEnabled143()) return;
+        std::lock_guard<std::mutex> lock(g_coinLock143);
+        auto it = g_coins143.find(handle);
+        if (it != g_coins143.end() && it->second.status != status)
+        {
+            Log("COIN status handle %p: %d -> %d", handle, it->second.status, status);
+            it->second.status = status;
+        }
+    }
 
     // Effects whose status takes over half a second to change after creation
     // (they are loading): logged with the time it took, the first 300.
@@ -294,6 +361,7 @@ namespace spfx
 
     void NoteInstanceStatus(void* handle, int32_t status)
     {
+        NoteCoinStatus143(handle, status);
         std::lock_guard<std::mutex> guard(g_pendingLock);
         auto it = g_pending.find(handle);
         if (it == g_pending.end())
